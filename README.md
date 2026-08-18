@@ -10,29 +10,29 @@ One-shot passwordless sudo setup for Debian/Ubuntu — detects, warns, configure
 4. **Validates** with `visudo -c` — rolls back automatically on syntax error
 5. **Verifies** the result with a live `sudo -n` check
 
-## Quick Start (frisches System ohne irgendetwas)
+## Quick Start (fresh system, nothing installed)
 
-Du hast ein blankes Debian/Ubuntu vor dir — kein git, kein sudo, keine tools.
-Nur ein root-login und ein terminal. So geht's:
+You're staring at a blank Debian/Ubuntu box — no git, no sudo, no tools.
+Just a root login and a terminal. Here's how:
 
-### Variante A: mit curl (empfohlen)
+### Option A: with curl (recommended)
 
 ```bash
-# 1. sudo + curl installieren (braucht man einmal als root)
+# 1. install sudo + curl (one-time, as root)
 apt update && apt install -y sudo curl
 
-# 2. vibeSudo herunterladen
+# 2. download vibeSudo
 curl -fsSL https://raw.githubusercontent.com/vibeopsde/vibeSudo/main/vibeSudo -o /tmp/vibeSudo
 chmod +x /tmp/vibeSudo
 
-# 3. erst mal nur angucken — ändert nichts, zeigt nur status + warnung
+# 3. dry-run first — shows status + warnings, changes nothing
 /tmp/vibeSudo --dry-run
 
-# 4. wenn alles plausibel: echt ausführen
+# 4. if it looks good: run for real
 /tmp/vibeSudo
 ```
 
-### Variante B: mit wget (falls kein curl)
+### Option B: with wget (if no curl)
 
 ```bash
 apt update && apt install -y sudo wget
@@ -42,7 +42,7 @@ chmod +x /tmp/vibeSudo
 /tmp/vibeSudo
 ```
 
-### Variante C: mit git
+### Option C: with git
 
 ```bash
 apt update && apt install -y git sudo
@@ -52,13 +52,13 @@ cd vibeSudo
 ./vibeSudo
 ```
 
-### Nach der installation
+### After installation
 
-Der user hat jetzt passwordless sudo. Ab hier kannst du als normaler user
-weiterarbeiten — z.b. tools installieren, repos clonen, hermes einrichten:
+The user now has passwordless sudo. From here you can work as a normal user —
+install tools, clone repos, set up your environment:
 
 ```bash
-sudo apt install -y python3 python3-venv  # oder was auch immer du brauchst
+sudo apt install -y python3 python3-venv  # or whatever you need
 ```
 
 ### Rollback
