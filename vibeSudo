@@ -1,0 +1,192 @@
+#!/usr/bin/env bash
+# vibeSudo — passwordless sudo onboarding für Debian/Ubuntu
+# usage: ./vibeSudo            (als normaler user oder root)
+#        vibeSudo --user bob    (anderen user als $SUDO_USER/$USER targeten)
+set -euo pipefail
+
+# ─── args ────────────────────────────────────────────────────────────────
+TARGET_USER="${SUDO_USER:-$USER}"
+DRY_RUN=0
+ASSUME_YES=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --user)      TARGET_USER="$2"; shift 2 ;;
+        --dry-run)   DRY_RUN=1; shift ;;
+        -y|--yes)    ASSUME_YES=1; shift ;;
+        -h|--help)
+            cat <<'EOF'
+vibeSudo — richtet passwordless sudo für einen user ein (Debian/Ubuntu)
+
+  ./vibeSudo                  aktuellen user ($USER) einrichten
+  ./vibeSudo --user bob       user "bob" einrichten
+  ./vibeSudo --dry-run        nur checken, nichts ändern
+  ./vibeSudo -y               ohne interaktive bestätigung
+
+Läuft als root (direkt oder via su/sudo) und richtet /etc/sudoers.d/<user>
+mit NOPASSWD: ALL ein. Vorher wird der user ggf. zur sudo-gruppe hinzugefügt.
+EOF
+            exit 0 ;;
+        *) echo "unbekannter parameter: $1" >&2; exit 2 ;;
+    esac
+done
+
+# ─── farben ──────────────────────────────────────────────────────────────
+if [[ -t 1 ]]; then
+    G='\033[32m'; Y='\033[33m'; R='\033[31m'; B='\033[1m'; D='\033[0m'
+    RB='\033[31;1m'   # rot+fett
+    RBD='\033[0m'     # reset nach rot+fett
+else
+    G=''; Y=''; R=''; B=''; D=''; RB=''; RBD=''
+fi
+ok()   { printf "${G}✓${D} %s\n" "$*"; }
+warn() { printf "${Y}⚠${D} %s\n" "$*"; }
+err()  { printf "${R}✗${D} %s\n" "$*" >&2; }
+info() { printf "${B}→${D} %s\n" "$*"; }
+
+# ─── erkennen: wer sind wir, können wir root? ────────────────────────────
+IS_ROOT=0
+HAS_SUDO=0
+HAS_NOPASSWD=0
+IN_SUDO_GROUP=0
+
+if [[ $EUID -eq 0 ]]; then IS_ROOT=1; fi
+
+# sudo-gruppe?
+if id -nG "$TARGET_USER" 2>/dev/null | tr ' ' '\n' | grep -qx sudo; then
+    IN_SUDO_GROUP=1
+fi
+
+# passwordless sudo bereits aktiv?
+if sudo -n -l -U "$TARGET_USER" 2>/dev/null | grep -q 'NOPASSWD'; then
+    HAS_NOPASSWD=1
+fi
+
+# können wir sudo nutzen?
+if [[ $IS_ROOT -eq 0 ]]; then
+    if sudo -n true 2>/dev/null; then
+        HAS_SUDO=1
+    fi
+fi
+
+# ─── sicherheitswarnung ──────────────────────────────────────────────────
+echo
+printf "${R}${B}====================================================================${D}\n"
+printf "${R}${B}  ⚠  VORSICHT: PASSWORDLESS SUDO — SICHERHEITSRISIKEN${D}\n"
+printf "${R}${B}====================================================================${D}\n"
+printf "${R}${B}${D}\n"
+printf "${R}${B}  NOPASSWD: ALL bedeutet: jeder Prozess, der als dieser User${D}\n"
+printf "${R}${B}  läuft, kann ${RB}JEDEN${RBD}${R}${B} systembefehl als root ausführen —${D}\n"
+printf "${R}${B}  ${RB}ohne passwortabfrage${RBD}${R}${B}. das hat konsequenzen:${D}\n"
+printf "${R}${B}${D}\n"
+printf "${R}${B}    • Malware / compromised prozess = volle root-rechte${D}\n"
+printf "${R}${B}    • Jedes script, jeder curl|bash = unbegrenzt root${D}\n"
+printf "${R}${B}    • Phishing-link genügt für komplette system-übernahme${D}\n"
+printf "${R}${B}    • SSH-forwarding, browser-extensions = potentielle${D}\n"
+printf "${R}${B}      root-einstiegspunkte${D}\n"
+printf "${R}${B}${D}\n"
+printf "${R}${B}  Empfehlungen:${D}\n"
+printf "${R}${B}    ✓ Nur auf vertrauenswürdigen single-user systemen${D}\n"
+printf "${R}${B}    ✓ Nicht auf servern mit public SSH-access${D}\n"
+printf "${R}${B}    ✓ Regelmäßig auditieren: sudo -l, /var/log/auth.log${D}\n"
+printf "${R}${B}    ✓ Rollback jederzeit: sudo rm /etc/sudoers.d/<user>${D}\n"
+printf "${R}${B}    ✗ Niemals auf shared/produktions-servern ohne absprache${D}\n"
+printf "${R}${B}${D}\n"
+printf "${R}${B}====================================================================${D}\n"
+echo
+
+# ─── status report ──────────────────────────────────────────────────────
+printf "${B}vibeSudo — onboarding status${D}\n"
+echo "────────────────────────────────────────"
+printf "  target user       : %s\n" "$TARGET_USER"
+printf "  in sudo group     : " ; [[ $IN_SUDO_GROUP -eq 1 ]] && ok "yes" || warn "no"
+printf "  passwordless sudo : " ; [[ $HAS_NOPASSWD -eq 1 ]] && ok "yes" || warn "no"
+printf "  running as root   : " ; [[ $IS_ROOT -eq 1 ]] && ok "yes" || warn "no"
+printf "  sudo available    : " ; [[ $HAS_SUDO -eq 1 ]] && ok "yes" || warn "no"
+echo "────────────────────────────────────────"
+echo
+
+# ─── schon erledigt? ────────────────────────────────────────────────────
+if [[ $HAS_NOPASSWD -eq 1 ]]; then
+    ok "passwordless sudo ist bereits aktiv für '$TARGET_USER'. nix zu tun."
+    exit 0
+fi
+
+# ─── brauchen wir root-rechte? ──────────────────────────────────────────
+if [[ $IS_ROOT -eq 0 && $HAS_SUDO -eq 0 ]]; then
+    err "ich brauche root-rechte, habe aber weder root noch funktionierendes sudo."
+    err "bitte als root ausführen:  su - -c './vibeSudo'"
+    err "oder falls ein anderer admin sudo hat: sudo ./vibeSudo"
+    exit 1
+fi
+
+# ─── prefix für root-befehle ─────────────────────────────────────────────
+if [[ $IS_ROOT -eq 1 ]]; then
+    AS_ROOT=""
+else
+    AS_ROOT="sudo "
+fi
+
+# ─── dry-run? ───────────────────────────────────────────────────────────
+if [[ $DRY_RUN -eq 1 ]]; then
+    info "dry-run — würde folgende schritte ausführen:"
+    [[ $IN_SUDO_GROUP -eq 0 ]] && echo "  1. user '$TARGET_USER' zur sudo-gruppe hinzufügen"
+    echo "  $([ $IN_SUDO_GROUP -eq 0 ] && echo 2 || echo 1). /etc/sudoers.d/$TARGET_USER mit NOPASSWD anlegen"
+    echo "  $([ $IN_SUDO_GROUP -eq 0 ] && echo 3 || echo 2). visudo -c zur validierung"
+    exit 0
+fi
+
+# ─── bestätigung ────────────────────────────────────────────────────────
+if [[ $ASSUME_YES -ne 1 ]]; then
+    printf "${Y}dies wird ${B}passwordless sudo${D}${Y} für '$TARGET_USER' einrichten.${D}\n"
+    printf "${Y}bedenke: jeder prozess als dieser user kann dann root — ohne passwort.${D}\n"
+    printf "${Y}weiter? [ja ich weiss das riskant ist/N] ${D}"
+    read -r reply
+    [[ "$reply" =~ ^[Jj][Aa]$ ]] || { echo "abgebrochen. (sicher ist sicher.)"; exit 0; }
+fi
+
+# ─── schritt 1: sudo-gruppe ─────────────────────────────────────────────
+if [[ $IN_SUDO_GROUP -eq 0 ]]; then
+    info "füge '$TARGET_USER' zur sudo-gruppe hinzu..."
+    $AS_ROOT usermod -aG sudo "$TARGET_USER"
+    ok "user zur sudo-gruppe hinzugefügt"
+    warn "(wirkt für neue logins; für die aktuelle session ist sudoers.d der weg)"
+else
+    ok "user ist bereits in der sudo-gruppe"
+fi
+
+# ─── schritt 2: sudoers.d drop-in ────────────────────────────────────────
+SUDOERS_FILE="/etc/sudoers.d/$TARGET_USER"
+info "lege $SUDOERS_FILE an..."
+
+$AS_ROOT bash -c "cat > '$SUDOERS_FILE' <<'SUDOERS'
+# vibeSudo — passwordless sudo für $TARGET_USER
+# angelegt von vibeSudo am $(date '+%Y-%m-%d %H:%M:%S')
+$TARGET_USER ALL=(ALL) NOPASSWD: ALL
+SUDOERS"
+
+$AS_ROOT chmod 0440 "$SUDOERS_FILE"
+ok "sudoers drop-in angelegt (mode 0440)"
+
+# ─── schritt 3: validieren ───────────────────────────────────────────────
+info "validiere sudoers-konfiguration..."
+if $AS_ROOT visudo -c -f "$SUDOERS_FILE" >/dev/null 2>&1; then
+    ok "sudoers-syntax gültig"
+else
+    err "syntax-fehler in $SUDOERS_FILE! rollback..."
+    $AS_ROOT rm -f "$SUDOERS_FILE"
+    err "drop-in entfernt. bitte manuell prüfen."
+    exit 1
+fi
+
+# ─── finaler check ───────────────────────────────────────────────────────
+echo
+if sudo -n -l -U "$TARGET_USER" 2>/dev/null | grep -q 'NOPASSWD'; then
+    ok "✅ passwordless sudo ist jetzt aktiv für '$TARGET_USER'"
+else
+    warn "konfiguration angelegt, aber live-check konnte NOPASSWD nicht verifizieren."
+    warn "evtl. wirkt es erst nach neuem login (group-cache)."
+    warn "testen mit:  sudo -n true && echo ok"
+fi
+echo
+printf "${G}vibeSudo: done.${D}\n"
